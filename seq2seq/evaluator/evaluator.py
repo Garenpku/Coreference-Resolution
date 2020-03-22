@@ -4,12 +4,9 @@ import torch
 import torchtext
 
 import seq2seq
-import autoeval
 from seq2seq.loss import NLLLoss
 from nltk.translate.bleu_score import corpus_bleu
 from nltk.translate.bleu_score import SmoothingFunction
-from autoeval.eval_embedding import Embed
-from autoeval.eval_distinct import distinct
 
 smoothie = SmoothingFunction().method4
 

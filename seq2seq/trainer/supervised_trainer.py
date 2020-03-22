@@ -13,7 +13,6 @@ from seq2seq.evaluator import Evaluator
 from seq2seq.loss import NLLLoss
 from seq2seq.optim import Optimizer
 from seq2seq.util.checkpoint import Checkpoint
-from autoeval.eval_embedding import Embed
 
 
 class SupervisedTrainer(object):

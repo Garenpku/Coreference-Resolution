@@ -12,7 +12,7 @@ from seq2seq.trainer import SupervisedTrainer
 from seq2seq.models import EncoderRNN, DecoderRNN, Seq2seq
 from seq2seq.loss import Perplexity, NLLLoss
 from seq2seq.optim import Optimizer
-from seq2seq.dataset import SourceField, TargetField
+from seq2seq.dataset import SourceField, TargetField, MyDataset
 from seq2seq.evaluator import Predictor
 from seq2seq.util.checkpoint import Checkpoint
 from collections import namedtuple
@@ -63,6 +63,13 @@ opt = parser.parse_args()
 LOG_FORMAT = '%(asctime)s %(name)-12s %(levelname)-8s %(message)s'
 logging.basicConfig(format=LOG_FORMAT, level=getattr(logging, opt.log_level.upper()))
 logging.info(opt)
+
+dataset = MyDataset("/Users/mac/Documents/NLP/Discourse Parsing/db-on-align")
+dataset.construct_vocabulary(10000)
+batch_generator = dataset.__iter__()
+for batch in batch_generator:
+    input_seq = batch.input_sequence
+    adjacency_matrix = batch.adjacency()
 
 if opt.load_checkpoint is not None:
     logging.info("loading checkpoint from {}".format(os.path.join(opt.expt_dir, Checkpoint.CHECKPOINT_DIR_NAME, opt.load_checkpoint)))
