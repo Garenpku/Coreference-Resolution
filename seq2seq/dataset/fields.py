@@ -4,6 +4,7 @@ import torchtext
 import json
 import numpy as np
 from parse_eds import *
+from collections import defaultdict
 
 
 def test_empty(file):
@@ -19,11 +20,15 @@ class Vocabulary:
         self.itos = itos
         self.frequency = frequency
 
+    def __len__(self):
+        return len(self.stoi)
+
 
 class BatchItem:
-    def __init__(self, data):
+    def __init__(self, data, vocabulary):
         self.data = data
-        self.input_sequence = [[[word.split('|')[0] for word in sentence['sequence'] if sentence['sentence']] for sentence in discourse['discourse']] for discourse in data]
+        self.vocabulary = vocabulary
+        self.input_sequence = [[[vocabulary.stoi[word.split('|')[0]] for word in sentence['sequence'] if sentence['sentence']] for sentence in discourse['discourse']] for discourse in data]
         self.index = [[[word.split('|')[1] for word in sentence['sequence']] for sentence in discourse['discourse']] for discourse in data]
         self.adjacency_matrix = self.construct_adjacency_matrix()
 
@@ -57,8 +62,6 @@ class BatchItem:
         return adjacency_batch
 
 
-
-
 class MyDataset:
     def __init__(self, data_dir, batch_size=32):
         all_list = sorted([file for file in os.listdir(data_dir) if file.startswith("dir")])
@@ -77,10 +80,11 @@ class MyDataset:
         self.data = data
         self.iter_count = 0
         self.batch_size = batch_size
+        self.vocab = None
 
     def construct_vocabulary(self, max_len=10000):
         frequency = {}
-        stoi = {}
+        stoi = defaultdict(int)
         itos = []
         for document in self.data:
             for sentence in document['discourse']:
@@ -93,9 +97,12 @@ class MyDataset:
                     else:
                         frequency[name] = 1
         sorted_freq = sorted(frequency.items(), key=lambda x: x[1], reverse=True)
+        itos.append('<unk>')
+        itos.append('<pad>')
+        stoi['<pad>'] = 1
         for i in range(min(max_len, len(sorted_freq))):
             itos.append(sorted_freq[i][0])
-            stoi[sorted_freq[i][0]] = i
+            stoi[sorted_freq[i][0]] = i + 2
         self.vocab = Vocabulary(stoi, itos, frequency)
         return None
 
@@ -111,7 +118,7 @@ class MyDataset:
             self.iter_count = 0
             raise StopIteration
         else:
-            return BatchItem(self.data[self.iter_count - self.batch_size:self.iter_count])
+            return BatchItem(self.data[self.iter_count - self.batch_size:self.iter_count], self.vocab)
 
 
 class SourceField(torchtext.data.Field):

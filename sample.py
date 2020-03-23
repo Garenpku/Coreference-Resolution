@@ -16,6 +16,7 @@ from seq2seq.dataset import SourceField, TargetField, MyDataset
 from seq2seq.evaluator import Predictor
 from seq2seq.util.checkpoint import Checkpoint
 from collections import namedtuple
+from seq2seq.models.GNN import GNN
 
 import os
 os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
@@ -67,9 +68,11 @@ logging.info(opt)
 dataset = MyDataset("/Users/mac/Documents/NLP/Discourse Parsing/db-on-align")
 dataset.construct_vocabulary(10000)
 batch_generator = dataset.__iter__()
+gnn = GNN(len(dataset.vocab), hidden_size=128, num_loop=5)
 for batch in batch_generator:
     input_seq = batch.input_sequence
     adjacency_matrix = batch.adjacency()
+    gnn(input_seq, adjacency_matrix, dataset.vocab)
 
 if opt.load_checkpoint is not None:
     logging.info("loading checkpoint from {}".format(os.path.join(opt.expt_dir, Checkpoint.CHECKPOINT_DIR_NAME, opt.load_checkpoint)))
@@ -80,75 +83,6 @@ if opt.load_checkpoint is not None:
     output_vocab = checkpoint.output_vocab
 else:
     # Prepare dataset
-    src = SourceField()
-    tgt = TargetField()
-    cpt = SourceField()
-    max_len = 200
-
-    fields = [('src', src), ('tgt', tgt)]
-    if opt.concept:
-        fields.append(('cpt', cpt))
-
-    def len_filter(example):
-        num_sentences = len(" ".join(example.src).split('<eou>'))
-        if num_sentences < 5:
-            return False
-        return len(example.src) <= max_len and len(example.tgt) <= max_len
-    train = torchtext.data.TabularDataset(
-        path=opt.train_path, format='tsv',
-        fields=fields,
-        filter_pred=None
-    )
-    dev = torchtext.data.TabularDataset(
-        path=opt.dev_path, format='tsv',
-        fields=fields,
-        filter_pred=None
-    )
-    # this is for the bug of UBUNTU corpus
-    if opt.concept:
-        train_dep = pickle.load(open(opt.dep_dir + "dep_train", "rb"))
-        valid_dep = pickle.load(open(opt.dep_dir + "dep_valid", "rb"))
-        cpt.build_vocab(train, max_size=50000)
-    else:
-        train_dep = None
-        valid_dep = None
-    example_train = []
-    example_dev = []
-    for example in train.examples:
-        try:
-            a = example.src
-            b = example.tgt
-            if len_filter(example):
-                example_train.append(example)
-        except:
-            continue
-        #if len(example) == len(fields):
-    for example in dev.examples:
-        try:
-            a = example.src
-            b = example.tgt
-            if len_filter(example):
-                example_dev.append(example)
-        except:
-            continue
-    train.examples = example_train
-    dev.examples = example_dev
-
-    src.build_vocab(train, max_size=50000)
-    tgt.build_vocab(train, max_size=50000)
-
-    small_vocab = [item for item in src.vocab.stoi.items() if src.vocab.freqs[item[0]] > 1]
-    small_vocab = dict(zip([item[0] for item in small_vocab], [item[1] for item in small_vocab]))
-
-    input_vocab = src.vocab
-    output_vocab = tgt.vocab
-
-    # NOTE: If the source field name and the target field name
-    # are different from 'src' and 'tgt' respectively, they have
-    # to be set explicitly before any training or inference
-    # seq2seq.src_field_name = 'src'
-    # seq2seq.tgt_field_name = 'tgt'
-
     # Prepare loss
     weight = torch.ones(len(tgt.vocab))
     pad = tgt.vocab.stoi[tgt.pad_token]
