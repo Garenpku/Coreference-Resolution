@@ -14,6 +14,27 @@ def test_empty(file):
     return False
 
 
+def cal_coreference_dist(batch):
+    coreference_dist = []
+    for i in range(len(batch.index)):
+        processed_index = [[str(j) + '|' + index for index in sent] for j, sent in enumerate(batch.index[i])]
+        index_linear = []
+        for line in processed_index:
+            index_linear.extend(line)
+        coreference = batch.data[i]['coreference']
+        coreference_index = []
+        for relation in coreference:
+            coreference_relation = []
+            for j in range(1, len(relation)):
+                cur = relation[j].split('|')[1] + '|' + relation[j].split('|')[-1]
+                last = relation[j-1].split('|')[1] + '|' + relation[j-1].split('|')[-1]
+                dist = index_linear.index(cur) - index_linear.index(last)
+                coreference_relation.append(cur + '|' + str(dist))
+            coreference_index.append(coreference_relation)
+        coreference_dist.append(coreference_index)
+    return coreference_dist
+
+
 class Vocabulary:
     def __init__(self, stoi, itos, frequency):
         self.stoi = stoi
@@ -63,7 +84,7 @@ class BatchItem:
 
 
 class MyDataset:
-    def __init__(self, data_dir, batch_size=32):
+    def __init__(self, data_dir, batch_size=3):
         all_list = sorted([file for file in os.listdir(data_dir) if file.startswith("dir")])
         data = []
         for file in all_list:

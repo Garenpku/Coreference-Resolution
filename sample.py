@@ -12,7 +12,7 @@ from seq2seq.trainer import SupervisedTrainer
 from seq2seq.models import EncoderRNN, DecoderRNN, Seq2seq
 from seq2seq.loss import Perplexity, NLLLoss
 from seq2seq.optim import Optimizer
-from seq2seq.dataset import SourceField, TargetField, MyDataset
+from seq2seq.dataset import SourceField, TargetField, MyDataset, cal_coreference_dist
 from seq2seq.evaluator import Predictor
 from seq2seq.util.checkpoint import Checkpoint
 from collections import namedtuple
