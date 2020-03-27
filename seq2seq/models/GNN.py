@@ -1,10 +1,18 @@
 import torch.nn as nn
 import torch
 import numpy as np
+from copy import deepcopy
 from . import torch_utils
 
 
+def to_cuda(x):
+    if torch.cuda.is_available():
+        return x.cuda()
+    return x
+
+
 def list_padding(ls, dim, pad_id="<pad>", dtype="ls"):
+    ls = deepcopy(ls)
     if dim == 2:
         max_len = max([len(line) for line in ls])
         for i in range(len(ls)):
@@ -37,6 +45,26 @@ def list_padding(ls, dim, pad_id="<pad>", dtype="ls"):
     return ls
 
 
+def tensor_padding(tensor):
+    max_len = max([len(line) for line in tensor])
+    for i, line in enumerate(tensor):
+        if len(line) < max_len:
+            tensor[i] = torch.cat([tensor[i], torch.zeros([max_len - len(line)] + list(line.shape)[1:])]).unsqueeze(0)
+        else:
+            tensor[i] = tensor[i].unsqueeze(0)
+    return torch.cat(tensor)
+
+def get_linearized_pos(ls, max_len):
+    new_index = [[[max_len * i + j for j, word in enumerate(sent)] for i, sent in enumerate(sample)] for sample in ls]
+    linearized_batch = []
+    for sample in new_index:
+        linearized_sample = []
+        for sent in sample:
+            linearized_sample.extend(sent)
+        linearized_batch.append(linearized_sample)
+    return linearized_batch
+
+
 class MLP(nn.Module):
     def __init__(self, num_layers, input_size, output_size, mid_size=128, activation=torch.tanh):
         super(MLP, self).__init__()
@@ -45,26 +73,36 @@ class MLP(nn.Module):
         self.activation = activation
         for i in range(num_layers):
             if num_layers == 1:
-                self.layers.append(self.to_cuda(torch.nn.Linear(input_size, output_size)))
+                self.layers.append(to_cuda(torch.nn.Linear(input_size, output_size)))
                 break
             if i == 0:
-                self.layers.append(self.to_cuda(torch.nn.Linear(input_size, mid_size)))
+                self.layers.append(to_cuda(torch.nn.Linear(input_size, mid_size)))
             elif i == num_layers - 1:
-                self.layers.append(self.to_cuda(torch.nn.Linear(mid_size, output_size)))
+                self.layers.append(to_cuda(torch.nn.Linear(mid_size, output_size)))
             else:
-                self.layers.append(self.to_cuda(torch.nn.Linear(mid_size, mid_size)))
-
-    def to_cuda(self, x):
-        if torch.cuda.is_available():
-            return x.cuda()
-        else:
-            return x
+                self.layers.append(to_cuda(torch.nn.Linear(mid_size, mid_size)))
 
     def forward(self, input_tensor):
         tmp = input_tensor
         for i in range(self.num_layers):
             tmp = self.activation(self.layers[i](tmp))
         return tmp
+
+
+class Attention(nn.Module):
+    def __init__(self, key_size, value_size, mid_size=128):
+        super(Attention, self).__init__()
+        self.key_size = key_size
+        self.value_size = value_size
+        self.W1 = to_cuda(torch.nn.Linear(key_size, mid_size))
+        self.W2 = to_cuda(torch.nn.Linear(value_size, mid_size))
+        self.A = to_cuda(torch_utils.add_params([mid_size, mid_size], "attention-A"))
+
+    def forward(self, key, value):
+        tmp_key = self.W1(key)
+        tmp_value = self.W2(value)
+        result = torch.bmm(torch.matmul(tmp_key, self.A), torch.transpose(tmp_value, 1, 2))
+        return result
 
 
 class GNN(nn.Module):
@@ -88,11 +126,19 @@ class GNN(nn.Module):
         for param in self.corefer_predictor.parameters():
             param.data.uniform_(-0.08, 0.08)
 
-    def forward(self, input_var, adjacency_matrix, vocab):
-        input_var = list_padding(input_var, 3, vocab.stoi['<pad>'])
+        self.attention = Attention(self.hidden_size, self.hidden_size)
+        for param in self.attention.parameters():
+            param.data.uniform_(-0.1, 0.1)
+
+    def forward(self, batch, vocab, gold_mention=True, K=400):
+        input_var_ls = batch.input_seq()
+        adjacency_matrix = batch.adjacency()
+        input_var = list_padding(input_var_ls, 3, vocab.stoi['<pad>'])
         input_var = torch.LongTensor(input_var)
         node_feature = self.node_embedder(input_var)
         adjacency_matrix = torch.Tensor(list_padding(adjacency_matrix, 3, dtype="np"))
+
+        # get node representation with gnn
         for gnn_idx in range(self.num_loop):
             tmp_feature = torch.matmul(node_feature, self.gnn_w) + self.gnn_b  # [ds_size, ds_hid_dim]
             '''
@@ -103,7 +149,51 @@ class GNN(nn.Module):
             tmp_feature = tmp_feature.reshape(list(input_var.shape) + [self.hidden_size])
             new_node_feature = torch.matmul(adjacency_matrix, tmp_feature)
             node_feature = self.gru_gnn(new_node_feature.reshape((-1, self.hidden_size)), node_feature.reshape((-1, self.hidden_size)))
-        node_feature = node_feature.reshape(list(input_var.shape) + [self.hidden_size])
+        node_feature = node_feature.reshape([input_var.shape[0], -1, self.hidden_size])
         mention_score = self.mention_predictor(node_feature)
+        linearized_node_pos = get_linearized_pos(batch.input_seq(), input_var.shape[2])
+        node_feature_no_padding = [torch.cat([sample[pos].unsqueeze(0) for pos in linearized_node_pos[i]], dim=0) for i, sample in enumerate(node_feature)]
+        mention_score_no_padding = [torch.cat([sample[pos].unsqueeze(0) for pos in linearized_node_pos[i]], dim=0) for i, sample in enumerate(mention_score)]
+        node_feature = tensor_padding(node_feature_no_padding)
+        mention_score = tensor_padding(mention_score_no_padding).reshape((len(input_var_ls), -1))
 
-        print(1)
+        # extract the features of mentions
+        if gold_mention:
+            coref_raw = batch.coreference()
+            linearized_coref_pos = []
+            linearized_last_coref = []
+            coref_pos = []
+            for i in range(len(batch.index)):
+                processed_index = [[str(j) + '|' + index for index in sent] for j, sent in enumerate(batch.index[i])]
+                index_linear = []
+                for line in processed_index:
+                    index_linear.extend(line)
+                coref_one_discourse = [[index_linear.index(mention.split('|')[1] + '|' + mention.split('|')[-1]) for mention in relation] for relation in coref_raw[i]]
+                linearized_one_discourse = []
+                linearized_last_discourse = []
+                for relation in coref_one_discourse:
+                    linearized_one_discourse.extend(relation)
+                    if len(relation):
+                        linearized_last_discourse.extend([-1] + relation[0:-1])
+                coref_pos.append(coref_one_discourse)
+                linearized_coref_pos.append(linearized_one_discourse)
+                linearized_last_coref.append(linearized_last_discourse)
+            mention_feature = [torch.stack([node_feature[i][mention] for mention in sample]) for i, sample in enumerate(linearized_coref_pos)]
+            mention_feature = tensor_padding(mention_feature)
+            mention_score_mention = [torch.stack([mention_score[i][mention] for mention in sample]) for i, sample in enumerate(linearized_coref_pos)]
+            mention_score_mention = tensor_padding(mention_score_mention)
+
+            """
+            for i in range(len(linearized_coref_pos)):
+                for j in range(len(linearized_coref_pos[i])):
+                    if linearized_coref_pos[i][j] <= linearized_last_coref[i][j]:
+                        print(linearized_coref_pos[i][j], linearized_last_coref[i][j], i, j)
+            """
+
+            attention_result = self.attention(mention_feature, node_feature)
+            score = attention_result + mention_score_mention.unsqueeze(-1) + mention_score.unsqueeze(1)
+            score = torch.cat([-10 * torch.ones([score.shape[0], score.shape[1], K]), score], dim=-1)
+            score_for_prediction = [torch.stack([score[i][j][idx:idx+K] for j, idx in enumerate(sample)]) for i, sample in enumerate(linearized_coref_pos)]
+            result = [torch.softmax(sample, dim=-1) for sample in score_for_prediction]
+            target = [[int(sample[i] != -1) * (K - 1 + sample[i] - linearized_coref_pos[j][i]) for i in range(len(sample))] for j, sample in enumerate(linearized_last_coref)]
+        return result, target

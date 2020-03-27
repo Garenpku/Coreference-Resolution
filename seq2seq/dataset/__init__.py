@@ -1,1 +1,1 @@
-from .dataset import SourceField, TargetField, MyDataset, cal_coreference_dist
+from .dataset import MyDataset, cal_coreference_dist

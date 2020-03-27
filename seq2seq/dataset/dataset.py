@@ -42,7 +42,7 @@ class Vocabulary:
         self.frequency = frequency
 
     def __len__(self):
-        return len(self.stoi)
+        return len(self.itos)
 
 
 class BatchItem:
@@ -52,12 +52,16 @@ class BatchItem:
         self.input_sequence = [[[vocabulary.stoi[word.split('|')[0]] for word in sentence['sequence'] if sentence['sentence']] for sentence in discourse['discourse']] for discourse in data]
         self.index = [[[word.split('|')[1] for word in sentence['sequence']] for sentence in discourse['discourse']] for discourse in data]
         self.adjacency_matrix = self.construct_adjacency_matrix()
+        #self.coreference_pos = [[[mention + '|' + str(self.index[i][int(mention.split('|')[1])].index(mention.split('|')[-1])) for mention in relation] for relation in discourse['coreference']] for i, discourse in enumerate(data)]
 
     def input_seq(self):
         return self.input_sequence
 
     def adjacency(self):
         return self.adjacency_matrix
+
+    def coreference(self):
+        return [sample['coreference'] for sample in self.data]
 
     def construct_adjacency_matrix(self):
         adjacency_batch = []
@@ -84,7 +88,7 @@ class BatchItem:
 
 
 class MyDataset:
-    def __init__(self, data_dir, batch_size=3):
+    def __init__(self, data_dir, batch_size=3, vocab=None):
         all_list = sorted([file for file in os.listdir(data_dir) if file.startswith("dir")])
         data = []
         for file in all_list:
@@ -97,11 +101,14 @@ class MyDataset:
                     else:
                         sent['parsed_eds'] = ""
                         sent['sequence'] = []
-                data.append(raw_data)
+
+                count = sum([len(relation) for relation in raw_data['coreference']])
+                if count:
+                    data.append(raw_data)
         self.data = data
         self.iter_count = 0
         self.batch_size = batch_size
-        self.vocab = None
+        self.vocab = vocab
 
     def construct_vocabulary(self, max_len=10000):
         frequency = {}
@@ -130,6 +137,9 @@ class MyDataset:
     def __iter__(self):
         return self
 
+    def __len__(self):
+        return int(len(self.data) / self.batch_size)
+
     def __next__(self):
         self.iter_count += self.batch_size
         if self.iter_count > len(self.data):
@@ -141,50 +151,3 @@ class MyDataset:
         else:
             return BatchItem(self.data[self.iter_count - self.batch_size:self.iter_count], self.vocab)
 
-
-class SourceField(torchtext.data.Field):
-    """ Wrapper class of torchtext.data.Field that forces batch_first and include_lengths to be True. """
-
-    def __init__(self, **kwargs):
-        logger = logging.getLogger(__name__)
-
-        if kwargs.get('batch_first') is False:
-            logger.warning("Option batch_first has to be set to use pytorch-seq2seq.  Changed to True.")
-        kwargs['batch_first'] = True
-        if kwargs.get('include_lengths') is False:
-            logger.warning("Option include_lengths has to be set to use pytorch-seq2seq.  Changed to True.")
-        kwargs['include_lengths'] = True
-
-        super(SourceField, self).__init__(**kwargs)
-
-class TargetField(torchtext.data.Field):
-    """ Wrapper class of torchtext.data.Field that forces batch_first to be True and prepend <sos> and append <eos> to sequences in preprocessing step.
-
-    Attributes:
-        sos_id: index of the start of sentence symbol
-        eos_id: index of the end of sentence symbol
-    """
-
-    SYM_SOS = '<sos>'
-    SYM_EOS = '<eos>'
-
-    def __init__(self, **kwargs):
-        logger = logging.getLogger(__name__)
-
-        if kwargs.get('batch_first') == False:
-            logger.warning("Option batch_first has to be set to use pytorch-seq2seq.  Changed to True.")
-        kwargs['batch_first'] = True
-        if kwargs.get('preprocessing') is None:
-            kwargs['preprocessing'] = lambda seq: [self.SYM_SOS] + seq + [self.SYM_EOS]
-        else:
-            func = kwargs['preprocessing']
-            kwargs['preprocessing'] = lambda seq: [self.SYM_SOS] + func(seq) + [self.SYM_EOS]
-
-        self.sos_id = None
-        self.eos_id = None
-        super(TargetField, self).__init__(**kwargs)
-
-    def build_vocab(self, *args, **kwargs):
-        super(TargetField, self).build_vocab(*args, **kwargs)
-        self.sos_id = self.vocab.stoi[self.SYM_SOS]
-        self.eos_id = self.vocab.stoi[self.SYM_EOS]
