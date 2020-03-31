@@ -51,7 +51,7 @@ class SupervisedTrainer(object):
     def _train_batch(self, model, batch, vocab, num_antecedents=400, teacher_forcing_ratio=0):
         loss = self.loss
         # Forward propagation
-        result, target = model(batch, vocab, num_antecedents)
+        result, target, _ = model(batch, vocab, num_antecedents)
 
         # Get loss
         loss.reset()
@@ -77,7 +77,8 @@ class SupervisedTrainer(object):
             raise AssertionError("NAN Triggered!")
         return lvalue
 
-    def _train_epoches(self, data_train, data_valid, model, n_epochs, start_epoch, start_step, save_file=False, dev_data=None,
+    def _train_epoches(self, data_train, data_valid, model, n_epochs, start_epoch, start_step, save_file=False,
+                       dev_data=None,
                        teacher_forcing_ratio=0, log_dir=None, embed_file=None, num_antecedents=400):
         log = self.logger
         # embed = Embed(embed_file)
@@ -96,11 +97,9 @@ class SupervisedTrainer(object):
         total_steps = steps_per_epoch * n_epochs
 
         """
-        dev_loss, accuracy = self.evaluator.evaluate(model, dev_data, vocabs=vocabs,
-                                                     use_concept=use_concept,
-                                                     log_dir=log_dir,
-                                                     cur_step=0
-                                                     )
+        dev_loss, recall, precision, F = self.evaluator.evaluate(model, data_train,
+                                                                 log_dir=log_dir,
+                                                                 cur_step=0)
         exit(0)
         """
 
@@ -145,11 +144,13 @@ class SupervisedTrainer(object):
                 if step % 200 == 0:
                     if log_file:
                         log_file.write("Step " + str(step) + '\n')
-                    dev_loss  = self.evaluator.evaluate(model, data_valid,
-                                                                 cur_step=step, log_dir=log_dir, log_file=log_file)
+                    dev_loss, recall, precision, F = self.evaluator.evaluate(model, data_valid,
+                                                                             cur_step=step, log_dir=log_dir,
+                                                                             log_file=log_file)
                     # self.optimizer.update(dev_loss, epoch)
-                    #log_msg = "Step %d, Dev %s: %.4f, Accuracy: %.4f" % (step, self.loss.name, dev_loss, accuracy)
-                    log_msg = "Step %d, Dev %s: %.4f" % (step, self.loss.name, dev_loss)
+                    # log_msg = "Step %d, Dev %s: %.4f, Accuracy: %.4f" % (step, self.loss.name, dev_loss, accuracy)
+                    log_msg = "Step %d, Dev %s: %.4f, Recall: %.4f, Precision: %.4f, F: %.4f" % (
+                    step, self.loss.name, dev_loss, recall, precision, F)
                     log.info(log_msg)
                     model.train(mode=True)
 
@@ -185,10 +186,10 @@ class SupervisedTrainer(object):
                     log_file.write(
                         "Train Average Loss: " + str(epoch_loss_avg) + " Plan Loss: " + str(
                             plan_loss_avg) + " Construct Loss: " + str(construct_loss_avg) + '\n')
-                dev_loss, accuracy = self.evaluator.evaluate(model, dev_data,
-                                                             log_dir=log_dir,
-                                                             cur_step=step,
-                                                             log_file=log_file)
+                dev_loss, accuracy, = self.evaluator.evaluate(model, dev_data,
+                                                              log_dir=log_dir,
+                                                              cur_step=step,
+                                                              log_file=log_file)
                 self.optimizer.update(dev_loss, epoch)
                 log_msg += ", Dev %s: %.4f, Accuracy: %.4f" % (self.loss.name, dev_loss, accuracy)
                 model.train(mode=True)

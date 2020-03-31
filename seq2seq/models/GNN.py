@@ -162,12 +162,14 @@ class GNN(nn.Module):
             coref_raw = batch.coreference()
             linearized_coref_pos = []
             linearized_last_coref = []
+            linearized_mention_pos = []
             coref_pos = []
             for i in range(len(batch.index)):
                 processed_index = [[str(j) + '|' + index for index in sent] for j, sent in enumerate(batch.index[i])]
                 index_linear = []
                 for line in processed_index:
                     index_linear.extend(line)
+                linearized_mention_pos.append(index_linear)
                 coref_one_discourse = [[index_linear.index(mention.split('|')[1] + '|' + mention.split('|')[-1]) for mention in relation] for relation in coref_raw[i]]
                 linearized_one_discourse = []
                 linearized_last_discourse = []
@@ -196,4 +198,4 @@ class GNN(nn.Module):
             score_for_prediction = [torch.stack([score[i][j][idx:idx+K] for j, idx in enumerate(sample)]) for i, sample in enumerate(linearized_coref_pos)]
             result = [torch.softmax(sample, dim=-1) for sample in score_for_prediction]
             target = [[int(sample[i] != -1) * (K - 1 + sample[i] - linearized_coref_pos[j][i]) for i in range(len(sample))] for j, sample in enumerate(linearized_last_coref)]
-        return result, target
+        return result, target, (linearized_mention_pos, linearized_coref_pos, linearized_last_coref)

@@ -7,6 +7,7 @@ import seq2seq
 from seq2seq.loss import NLLLoss
 from nltk.translate.bleu_score import corpus_bleu
 from nltk.translate.bleu_score import SmoothingFunction
+from eval import *
 
 smoothie = SmoothingFunction().method4
 
@@ -60,16 +61,76 @@ class Evaluator(object):
         cnt = 0
         loss_sum = 0
 
-        context_corpus = []
-        reference_corpus = []
-        prediction_corpus = []
-        multi_turn_corpus = []
-        state_corpus = []
-        multi_turn_state_corpus = []
+        recall_all = 0
+        precision_all = 0
+        f_all = 0
         with torch.no_grad():
             for batch in batch_iterator:
-                cnt += 1
-                result, target = model(batch, data.vocab, num_antecedents)
+                result, target, (mention_pos, coref_pos, last_pos) = model(batch, data.vocab, num_antecedents)
+                for i, sample in enumerate(result):
+                    cnt += 1
+                    predicted_index = sample.topk(1, dim=-1)[1].reshape(-1).tolist()
+                    entity_num = 0
+                    gold_cluster = {}
+                    reverse_gold_cluster = {}
+                    system_cluster = {}
+                    reverse_system_cluster = {}
+                    antecedent_dict = {}
+                    for j in range(len(predicted_index)):
+                        predicted_token = mention_pos[i][predicted_index[j] + coref_pos[i][j] - (num_antecedents - 1)]
+                        curren_token = mention_pos[i][coref_pos[i][j]]
+                        target_token = last_pos[i][j]
+                        if target_token == -1:
+                            entity_num += 1
+                            gold_cluster[entity_num] = [curren_token]
+                            reverse_gold_cluster[curren_token] = entity_num
+                        else:
+                            gold_cluster[entity_num].append(curren_token)
+                            reverse_gold_cluster[curren_token] = entity_num
+                        if curren_token == predicted_token:
+                            continue
+                        antecedent_dict[curren_token] = predicted_token
+                        if predicted_token not in antecedent_dict:
+                            antecedent_dict[predicted_token] = ""
+                    entity_num = 0
+                    for node in antecedent_dict:
+                        if not antecedent_dict[node]:
+                            if node in reverse_system_cluster:
+                                continue
+                            system_cluster[entity_num] = [node]
+                            reverse_system_cluster[node] = entity_num
+                            entity_num += 1
+                        else:
+                            cur_node = node
+                            traversed = [node]
+                            while antecedent_dict[cur_node]:
+                                cur_node = antecedent_dict[cur_node]
+                                if cur_node not in traversed:
+                                    traversed.append(cur_node)
+                                else:
+                                    print('ERROR')
+                            if cur_node in reverse_system_cluster:
+                                cluster_index = reverse_system_cluster[cur_node]
+                            else:
+                                cluster_index = entity_num
+                                system_cluster[entity_num] = [cur_node]
+                                reverse_system_cluster[cur_node] = entity_num
+                                entity_num += 1
+                            cur_node = node
+                            while antecedent_dict[cur_node]:
+                                if cur_node not in reverse_system_cluster:
+                                    system_cluster[cluster_index].append(cur_node)
+                                    reverse_system_cluster[cur_node] = cluster_index
+                                    cur_node = antecedent_dict[cur_node]
+                                else:
+                                    break
+
+                    score = B3(gold_cluster, reverse_gold_cluster, system_cluster, reverse_system_cluster)
+                    print(score)
+                    recall_all += score[0]
+                    precision_all += score[1]
+                    f_all += score[2]
+
 
         """
         # Evaluation
@@ -142,4 +203,4 @@ class Evaluator(object):
             accuracy = match / total
         """
 
-        return loss.get_loss()
+        return loss.get_loss(), recall_all / cnt, precision_all / cnt, f_all / cnt
